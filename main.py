@@ -1,211 +1,145 @@
 #!/data/data/com.termux/files/usr/bin/python3
-import re
-import requests
-import os
-from youtube_transcript_api import YouTubeTranscriptApi
-import subprocess
+# Improved version of the user's script.
 import json
-from typing import List, Optional
-from sys import exit
-from glob import glob
+import os
+import re
+import subprocess
 from datetime import datetime
-from dotenv import load_dotenv, dotenv_values
+from glob import glob
+from time import sleep
+from typing import List, Optional
+import shutil
+
+import requests
+from dotenv import load_dotenv
+from youtube_transcript_api import YouTubeTranscriptApi
 
 load_dotenv()
-CHANNEL_FILE = '/data/data/com.termux/files/home/storage/shared/projects/languages/python/codes/yt_rrp/channels.txt'
-ARCHIVE_FILE = "/data/data/com.termux/files/home/storage/shared/study/languages/python/codes/yt_rrp/archive.txt"
 
-def channel_list(channel_file) -> list:
-    "" "takes a file of channel per line and generate a python list"""
+CHANNEL_FILE="/data/data/com.termux/files/home/storage/shared/YouTube-Subtitle-Extractor/channels.txt"
+ARCHIVE_FILE="/data/data/com.termux/files/home/storage/shared/projects/YouTube-Subtitle-Extraxtor/archive.txt"
+LOG_FILE="/data/data/com.termux/files/home/storage/shared/projects/YouTube-Subtitle-Extraxtor/log.txt"
+
+
+YTDLP = shutil.which("yt-dlp")
+if YTDLP is None:
+    raise RuntimeError("yt-dlp not found in PATH")
+cmd = [YTDLP, ...]
+
+def ran_at(log_file):
+    with open(log_file,"a",encoding="utf-8") as f:
+        f.write(str(datetime.now())+"\n")
+
+def channel_list(path)->List[str]:
     try:
-        with open(channel_file, 'r') as f:
-            content = f.read()
-            if not content.strip():
-                exit(f'file is empty: {channel_file}')
-
-            channels = [line.strip() for line in content.splitlines()]
-            return channels
+        with open(path,"r",encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip()]
     except FileNotFoundError:
-        print(f'file not found {channel_file}')
+        print("Channel file not found.")
         return []
 
-def read_json(json_file):
+def read_json(path):
     try:
-        with open(json_file, 'r') as f:
-            data_dict = json.load(f)
-            return data_dict
-    except FileNotFoundError:
-        print(f'file is not available')
+        with open(path,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"JSON error {path}: {e}")
         return None
 
-def make_json_files_of_urls(channel_list: list) -> None:
-    for channel in channel_list:
-        get_links_to_file(channel)
-
-
-def get_link_to_file(channel_url: str) -> Optional[List[str]]:
-    '''takes a url of channel as input and make json files of newly released video'''
-    print(f'started making json file for {channel_url}')
-
-
-    #in second loop, program will put json data into already created files because %autoincrement does not know in  which iteration it is
-    # that is why channel name is must 
-    command = [
-        "yt-dlp",
-        '--simulate',
-        '--no-quiet',
-        '--lazy-playlist',
-        "--dateafter", "now-3day",
-        "--break-on-reject",
-        '--force-write-archive', "--download-archive", ARCHIVE_FILE,
-        "--print-to-file", '%(.{channel,title,upload_date,webpage_url})#j', f'url_extract_{channel_url.split('/')[-1]}_%(autonumber)d.json',
+def get_link_to_file(channel_url):
+    print(f"Checking {channel_url}")
+    cmd=[
+        "cmd","--simulate","--sleep-interval","10","--no-quiet",
+        "--lazy-playlist","--dateafter","now-20day","--break-on-reject",
+        "--force-write-archive","--download-archive",ARCHIVE_FILE,
+        "--print-to-file",
+        '%(.{channel,title,upload_date,webpage_url})#j',
+        f'📺 @{channel_url.split("/")[-1]} || %(title)s || 📆 %(upload_date>%Y-%m-%d)s || yt_subtitle.json',
         channel_url
     ]
+    subprocess.run(cmd,capture_output=True,text=True)
 
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.stdout:
-        result = result.stdout.strip().split('\n')
-        print(result)
-        return result
-    return None
+def make_json_files_of_urls(channels):
+    for c in channels:
+        get_link_to_file(c)
 
-def get_files(match='url_extract_*.json')-> list:
-    '''will return empty list if no files are available or matching'''
-    files = glob(match)
-    return files
+def get_files():
+    return glob("*yt_subtitle.json")
 
 def send_to_tg(message):
-    bot_token = os.getenv("BOT_TOKEN")
-    chat_id = os.getenv("CHAT_ID")
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    params = {
-        'chat_id': chat_id,
-        'text': message,
-        'parse_mode': 'HTML'
-    }
-    response = requests.get(url, params=params)
-    return response.json()   
-   
-def get_id(vid_url: str)-> Optional[str]:
-    data = re.findall(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", vid_url)
-    if data:
-        return data[0]
-    return None
-
-def get_subtitle(vid_id) -> str:
+    token=os.getenv("BOT_TOKEN")
+    chat=os.getenv("CHAT_ID")
+    url=f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(vid_id, languages=('hi', 'en'), preserve_formatting=True)
-        transcript_text = " ".join([entry['text'] for entry in transcript])
-        return transcript_text
+        r=requests.post(url,data={"chat_id":chat,"text":message,"parse_mode":"HTML"},timeout=30)
+        print(r.status_code)
     except Exception as e:
-        print("Error:", e)
+        print(e)
 
+def get_id(url)->Optional[str]:
+    m=re.findall(r"(?:v=|/)([0-9A-Za-z_-]{11}).*",url)
+    return m[0] if m else None
 
-def split_story(story, max_words=46):
-    words = story.split()
-    parts = []
-    current_part = []
-    current_word_count = 0
+def get_subtitle(vid):
+    try:
+        t=YouTubeTranscriptApi.get_transcript(vid,languages=("hi","en"),preserve_formatting=True)
+        return " ".join(x["text"] for x in t)
+    except Exception as e:
+        print(f"Subtitle error: {e}")
+        return None
 
-    for word in words:
-        if current_word_count + len(current_part) + 1 <= max_words:  # +1 for the space
-            current_part.append(word)
-            current_word_count += 1
+def save_to_device(filename,channel,year,month,text):
+    folder=f"subtitles/{channel}/{year}/{month}"
+    os.makedirs(folder,exist_ok=True)
+    out=os.path.splitext(filename)[0]+".txt"
+    with open(os.path.join(folder,out),"w",encoding="utf-8") as f:
+        f.write(text)
+
+def split_subtitle(text,max_chars=4000):
+    words=text.split()
+    parts=[]
+    cur=""
+    for w in words:
+        if len(cur)+len(w)+1<=max_chars:
+            cur+=(" " if cur else "")+w
         else:
-            parts.append(" ".join(current_part))
-            current_part = [word]
-            current_word_count = 1
-    if current_part:
-        parts.append(" ".join(current_part))
+            parts.append(cur)
+            cur=w
+    if cur:
+        parts.append(cur)
     return parts
 
-story_text = '''YFree download at http://rahulmehta'''
-story_parts = split_story(story_text)
-
-for part in story_parts:
-    print(part)
-
-
-# for a single session
-
 def main():
-    files = FileManagment(CHANNEL_FILE)
-    print(f'initialising FileManagment Class')
-    files.make_json_files_of_urls()
-    print(f'making json files')
-    for dic in files.get_files():
-        json_dict = files.read_json(dic)
+    channels=channel_list(CHANNEL_FILE)
+    print(f"{len(channels)} channels")
+    make_json_files_of_urls(channels)
+    sleep(10)
+    for file in get_files():
+        try:
+            data=read_json(file)
+            if not data:
+                continue
+            title=data.get("title","No Title")
+            url=data.get("webpage_url","")
+            upload=data.get("upload_date","Unknown")
+            year=upload[:4]
+            month=upload[4:6]
+            channel=data.get("channel","Unknown")
+            vid=get_id(url)
+            subtitle=get_subtitle(vid) if vid else None
+            if subtitle is None:
+                subtitle="No Subtitle"
+            msg=f"<b>{title}</b>\n📅 {upload}\n📺 {channel}\n🔗 {url}"
+            send_to_tg(msg)
+            save_to_device(file,channel,year,month,msg+"\n\n"+subtitle)
+            for i,part in enumerate(split_subtitle(subtitle),1):
+                print(f"Sending {i}")
+                send_to_tg(part)
+            os.remove(file)
+        except Exception as e:
+            print(f"Failed {file}: {e}")
+            continue
+    ran_at(LOG_FILE)
 
-        title = json_dict['title']
-        upload_date = datetime.strptime(json_dict['upload_date'], "%Y%m%d").date()
-        channel_name = json_dict['channel']
-        link = json_dict['webpage_url']
-        yt = Video(link)
-        subtitle = yt.subtitle
-        message = f'''
-        <b>{title}\n\n\n</b>
-        {link}
-        {upload_date}
-        <u>Channel: {channel_name}\n\n\n </u>
-        {subtitle}'''
-
-        messages = [ message[i:i+4095] for i in range(0, len(message), 4095) ]
-        for message in messages:
-            tg = Sender(message)
-            tg.send_to_tg()
-            print(message)
-        os.remove(dic)
-
-if __name__ == '__main__':
-    main()
-    files.make_json_files_of_urls
-    for dic in files.get_files():
-        json_dict = files.read_json(dic)
-        yt = Video(link)
-
-        title = json_dict['title']
-        upload_date = datetime.strptime(json_dict['upload_date'], "%Y%m%d").date()
-        channel_name = json_dict['channel']
-        link = json_dict['webpage_url']
-        subtitle = yt.subtitle
-
-        message = f'''
-        <b>{title}\n\n\n</b>
-        {link}
-        {upload_date}
-        <u>Channel: {channel_name}\n\n\n </u>
-        {subtitle}'''
-
-        messages = [ message[i:i+4095] for i in range(0, len(message), 4095) ]
-        for message in messages:
-            print(message)
-        os.remove(dic)
-
-
-if __name__ == '__main__':
-    main()
-ain()
-").date()
-        channel_name = json_dict['channel']
-        link = json_dict['webpage_url']
-        yt = Video(link)
-        subtitle = yt.subtitle
-        message = f'''
-        <b>{title}\n\n\n</b>
-        {link}
-        {upload_date}
-        <u>Channel: {channel_name}\n\n\n </u>
-        {subtitle}'''
-
-        messages = split_story(message)
-        for message in messages:
-            tg = Sender(message)
-            tg.send_to_tg()
-            print(message)
-        os.remove(dic)
-
-if __name__ == '__main__':
-    main()
-name__ == '__main__':
->>>>>>> 7a4526e (nothimg)
+if __name__=="__main__":
     main()
